@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { 
   Sparkles, 
@@ -10,16 +11,27 @@ import {
   MessageSquare, 
   ArrowLeft, 
   Send, 
-  ThumbsUp, 
   AlertCircle, 
   Loader2, 
   Check, 
   ArrowRight 
 } from 'lucide-react';
-import { apolloPreparePageData } from '@/data/mockData';
-import { submitPrepFeedback } from '@/lib/mockApi';
+import { apiGet, apiPost } from '@/lib/api';
+import { Project, PrepFeedbackResponse } from '@/lib/types';
 
-export default function PrepFeedbackPage() {
+function deriveProjectCode(name: string): string {
+  const clean = name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return clean.slice(0, 6) || 'PROJ';
+}
+
+function PrepFeedbackContent() {
+  const searchParams = useSearchParams();
+  const queryProjectId = searchParams.get('project');
+
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('');
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
   const [rating, setRating] = useState<number>(5);
   const [usefulAspects, setUsefulAspects] = useState<string[]>([
     'Key Decisions Recall',
@@ -43,6 +55,36 @@ export default function PrepFeedbackPage() {
     'Unresolved Issues Warning'
   ];
 
+  useEffect(() => {
+    async function loadProjects() {
+      try {
+        const list = await apiGet<Project[]>('/projects');
+        setProjects(list);
+
+        if (list.length > 0) {
+          const matched = queryProjectId
+            ? list.find(p => p.id === queryProjectId || p.name.toLowerCase() === queryProjectId.toLowerCase())
+            : list[0];
+
+          const activeId = matched ? matched.id : list[0].id;
+          setSelectedProjectId(activeId);
+          setSelectedProject(matched || list[0]);
+        }
+      } catch (err) {
+        console.error('Failed to load projects for feedback:', err);
+      }
+    }
+
+    loadProjects();
+  }, [queryProjectId]);
+
+  useEffect(() => {
+    if (selectedProjectId && projects.length > 0) {
+      const found = projects.find(p => p.id === selectedProjectId) || null;
+      setSelectedProject(found);
+    }
+  }, [selectedProjectId, projects]);
+
   const toggleUsefulOption = (option: string) => {
     if (usefulAspects.includes(option)) {
       setUsefulAspects(usefulAspects.filter(o => o !== option));
@@ -51,27 +93,40 @@ export default function PrepFeedbackPage() {
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (rating < 1) {
-      setValidationError("Please select a preparation rating.");
+    if (!selectedProjectId) {
+      setValidationError("Please select a project for this feedback.");
+      return;
+    }
+
+    if (rating < 1 || rating > 5) {
+      setValidationError("Please select a preparation rating between 1 and 5 stars.");
       return;
     }
 
     setValidationError(null);
     setIsSubmitting(true);
 
-    submitPrepFeedback({
-      projectId: 'apollo',
-      rating,
-      usefulAspects,
-      whatWasMissing,
-      nextTimeFocus
-    }).then(() => {
-      setIsSubmitting(false);
+    try {
+      await apiPost<PrepFeedbackResponse>(
+        `/projects/${selectedProjectId}/feedback`,
+        {
+          usefulness_rating: rating,
+          what_was_useful: usefulAspects.length > 0 ? usefulAspects.join(', ') : undefined,
+          what_was_missing: whatWasMissing.trim() || undefined,
+          focus_next_time: nextTimeFocus.trim() || undefined
+        }
+      );
+
       setSubmittedSuccess(true);
-    });
+    } catch (err) {
+      console.error('Failed to submit prep feedback:', err);
+      setValidationError(err instanceof Error ? err.message : 'Failed to submit feedback');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const handleReset = () => {
@@ -80,7 +135,11 @@ export default function PrepFeedbackPage() {
     setWhatWasMissing('');
     setNextTimeFocus('');
     setSubmittedSuccess(false);
+    setValidationError(null);
   };
+
+  const projectName = selectedProject ? selectedProject.name : 'Project';
+  const projectCode = selectedProject ? deriveProjectCode(selectedProject.name) : 'PROJ';
 
   return (
     <div className="flex min-h-screen bg-slate-950 font-sans">
@@ -93,7 +152,10 @@ export default function PrepFeedbackPage() {
 
           {/* Breadcrumb Navigation */}
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Link href="/prepare/apollo" className="hover:text-indigo-400 transition-colors flex items-center gap-1">
+            <Link 
+              href={selectedProjectId ? `/prepare?project=${selectedProjectId}` : '/prepare'} 
+              className="hover:text-indigo-400 transition-colors flex items-center gap-1"
+            >
               <ArrowLeft className="w-3.5 h-3.5" />
               <span>Back to Prepare Me</span>
             </Link>
@@ -102,21 +164,38 @@ export default function PrepFeedbackPage() {
           </div>
 
           {/* Header */}
-          <div className="flex items-center gap-3 pb-6 border-b border-slate-800">
-            <div className="p-3 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20">
-              <MessageSquare className="w-6 h-6" />
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="p-3 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white shadow-lg shadow-indigo-500/20">
+                <MessageSquare className="w-6 h-6" />
+              </div>
+              <div>
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">
+                  {projectCode}
+                </span>
+                <h1 className="text-2xl font-extrabold text-slate-100 tracking-tight mt-0.5">
+                  How was this preparation?
+                </h1>
+                <p className="text-xs text-slate-400">
+                  Help refine future AI recall briefings for <span className="text-indigo-300 font-medium">{projectName}</span>. Feedback is ingested into long-term memory.
+                </p>
+              </div>
             </div>
-            <div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 font-mono">
-                {apolloPreparePageData.projectCode}
-              </span>
-              <h1 className="text-2xl font-extrabold text-slate-100 tracking-tight mt-0.5">
-                How was this preparation?
-              </h1>
-              <p className="text-xs text-slate-400">
-                Help refine future AI recall briefings for <span className="text-indigo-300 font-medium">Project Apollo</span>. Feedback focuses strictly on preparation quality.
-              </p>
-            </div>
+
+            {/* Project Picker */}
+            {projects.length > 1 && (
+              <div className="shrink-0">
+                <select
+                  value={selectedProjectId}
+                  onChange={(e) => setSelectedProjectId(e.target.value)}
+                  className="bg-slate-900 border border-slate-800 rounded-xl px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-indigo-500"
+                >
+                  {projects.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
 
           {/* Validation Error */}
@@ -136,24 +215,32 @@ export default function PrepFeedbackPage() {
                 </div>
                 <div>
                   <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                    FEEDBACK RECORDED
+                    FEEDBACK INGESTED INTO LONG-TERM MEMORY
                   </span>
                   <h2 className="text-lg font-bold text-slate-100 mt-0.5">
-                    Thank you for rating Project Apollo's meeting preparation!
+                    Thank you for rating {projectName}'s meeting preparation!
                   </h2>
                 </div>
               </div>
 
               <p className="text-xs text-slate-300 leading-relaxed">
-                Your evaluation ({rating}/5 rating) has been saved. RecallMeet will use this feedback to tailor future preparation briefings, key decision highlights, and participant context.
+                Your evaluation ({rating}/5 rating) has been saved in PostgreSQL and committed into Hindsight long-term memory. The next time you trigger "Prepare Me" for this project, the briefing will adapt to your feedback.
               </p>
 
               <div className="flex flex-col sm:flex-row items-center gap-3 pt-2">
                 <Link
-                  href="/projects/apollo"
+                  href={`/prepare?project=${selectedProjectId}`}
                   className="w-full sm:w-auto px-5 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold flex items-center justify-center gap-2 shadow-lg shadow-indigo-600/20"
                 >
-                  <span>Return to Project Apollo</span>
+                  <Sparkles className="w-4 h-4 text-indigo-200" />
+                  <span>Prepare Me Again (See Updated Learning)</span>
+                </Link>
+
+                <Link
+                  href={`/projects/${selectedProjectId}`}
+                  className="w-full sm:w-auto px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold flex items-center justify-center gap-2 border border-slate-700"
+                >
+                  <span>Return to {projectName}</span>
                   <ArrowRight className="w-4 h-4" />
                 </Link>
 
@@ -242,7 +329,7 @@ export default function PrepFeedbackPage() {
                   rows={3}
                   value={whatWasMissing}
                   onChange={(e) => setWhatWasMissing(e.target.value)}
-                  placeholder="e.g. Include direct links to past client quotes or specific GraphQL schema code snippets..."
+                  placeholder="e.g. The client concern about the project timeline needed more attention..."
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 transition-colors leading-relaxed"
                 />
               </div>
@@ -250,13 +337,13 @@ export default function PrepFeedbackPage() {
               {/* 4. What should I focus on next time? */}
               <div className="space-y-2">
                 <label className="text-xs font-bold text-slate-200 block">
-                  4. What should AI recall focus on for future Project Apollo meetings?
+                  4. What should the preparation focus on for future {projectName} meetings?
                 </label>
                 <textarea
                   rows={3}
                   value={nextTimeFocus}
                   onChange={(e) => setNextTimeFocus(e.target.value)}
-                  placeholder="e.g. Prioritize overdue technical commitments assigned to Sarah and David before listing general discussion points..."
+                  placeholder="e.g. Prioritize client concerns about project timeline and unblock authentication flow..."
                   className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-200 placeholder-slate-600 focus:outline-none focus:border-indigo-500/50 transition-colors leading-relaxed"
                 />
               </div>
@@ -264,7 +351,7 @@ export default function PrepFeedbackPage() {
               {/* Submit Action Button */}
               <div className="pt-3 border-t border-slate-800/80 flex items-center justify-end gap-3">
                 <Link
-                  href="/prepare/apollo"
+                  href={selectedProjectId ? `/prepare?project=${selectedProjectId}` : '/prepare'}
                   className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition-colors"
                 >
                   Cancel
@@ -278,7 +365,7 @@ export default function PrepFeedbackPage() {
                   {isSubmitting ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-indigo-200" />
-                      <span>Saving Preparation Feedback...</span>
+                      <span>Saving Feedback to Hindsight...</span>
                     </>
                   ) : (
                     <>
@@ -294,5 +381,17 @@ export default function PrepFeedbackPage() {
         </div>
       </main>
     </div>
+  );
+}
+
+export default function PrepFeedbackPage() {
+  return (
+    <React.Suspense fallback={
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-400">
+        <Loader2 className="w-8 h-8 text-indigo-400 animate-spin" />
+      </div>
+    }>
+      <PrepFeedbackContent />
+    </React.Suspense>
   );
 }

@@ -1,32 +1,71 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { 
   LayoutDashboard, 
   FolderKanban, 
   CalendarDays, 
   Sparkles, 
   CheckSquare, 
-  Settings,
-  ChevronRight,
   LogOut,
   Upload
 } from 'lucide-react';
-import { currentUser } from '@/data/mockData';
+import { apiGet, clearAuthToken } from '@/lib/api';
+import { User, Project, Commitment } from '@/lib/types';
 
 interface SidebarProps {
   activeTab?: string;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'dashboard' }) => {
+  const router = useRouter();
+  const [user, setUser] = useState<User | null>(null);
+  const [counts, setCounts] = useState<{
+    projects: number;
+    commitments: number;
+  }>({ projects: 0, commitments: 0 });
+
+  useEffect(() => {
+    async function loadSidebarData() {
+      try {
+        const [me, projects, commitments] = await Promise.all([
+          apiGet<User>('/auth/me').catch(() => null),
+          apiGet<Project[]>('/projects').catch(() => [] as Project[]),
+          apiGet<Commitment[]>('/commitments').catch(() => [] as Commitment[])
+        ]);
+
+        if (me) setUser(me);
+        const pending = commitments.filter(c => c.status === 'pending').length;
+        setCounts({
+          projects: projects.length,
+          commitments: pending
+        });
+      } catch (err) {
+        console.error('Failed to load user info in sidebar:', err);
+      }
+    }
+
+    loadSidebarData();
+  }, []);
+
+  const handleLogout = () => {
+    clearAuthToken();
+    router.replace('/login');
+  };
+
   const navItems = [
-    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: null },
-    { id: 'projects', label: 'Projects', icon: FolderKanban, badge: '4' },
-    { id: 'upload', label: 'Upload Meeting', icon: Upload, badge: 'New' },
-    { id: 'meetings', label: 'Meetings', icon: CalendarDays, badge: '12' },
-    { id: 'commitments', label: 'Commitments', icon: CheckSquare, badge: '5' },
+    { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, badge: null, href: '/' },
+    { id: 'projects', label: 'Projects', icon: FolderKanban, badge: counts.projects > 0 ? String(counts.projects) : null, href: '/projects' },
+    { id: 'prepare', label: 'Prepare Me', icon: Sparkles, badge: 'AI', href: '/prepare' },
+    { id: 'upload', label: 'Upload Meeting', icon: Upload, badge: 'New', href: '/meetings/upload' },
+    { id: 'commitments', label: 'Commitments', icon: CheckSquare, badge: counts.commitments > 0 ? String(counts.commitments) : null, href: '/commitments' },
   ];
+
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()
+    : 'RM';
 
   return (
     <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col justify-between shrink-0 min-h-screen select-none">
@@ -34,7 +73,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'dashboard' }) => 
       <div>
         {/* Brand Header */}
         <div className="p-5 border-b border-slate-800/80 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <Link href="/" className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-indigo-500 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/20 ring-1 ring-white/20">
               <Sparkles className="w-5 h-5 text-white" />
             </div>
@@ -46,7 +85,7 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'dashboard' }) => 
                 AI Sync Intelligence
               </span>
             </div>
-          </div>
+          </Link>
         </div>
 
         {/* Navigation Menu */}
@@ -58,14 +97,10 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'dashboard' }) => 
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = item.id === activeTab;
-              const href = 
-                item.id === 'dashboard' ? '/' : 
-                item.id === 'projects' ? '/projects' : 
-                (item.id === 'upload' || item.id === 'meetings') ? '/meetings/upload' : '#';
               return (
                 <Link
                   key={item.id}
-                  href={href}
+                  href={item.href}
                   className={`w-full flex items-center justify-between px-3 py-2.5 rounded-lg text-sm font-medium transition-all duration-150 ${
                     isActive
                       ? 'bg-indigo-600/15 text-indigo-400 border border-indigo-500/30 shadow-sm'
@@ -91,43 +126,49 @@ export const Sidebar: React.FC<SidebarProps> = ({ activeTab = 'dashboard' }) => 
           </nav>
         </div>
 
-        {/* Hackathon Demo Highlight Card */}
+        {/* System Memory Status Card */}
         <div className="mx-3 p-3.5 rounded-xl bg-slate-800/50 border border-slate-700/50">
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-xs font-semibold text-indigo-400 flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-              Active Demo
+              Memory Loop
             </span>
             <span className="text-[10px] bg-indigo-950 text-indigo-300 border border-indigo-800/60 px-1.5 py-0.5 rounded font-mono">
-              APOLLO
+              ACTIVE
             </span>
           </div>
           <p className="text-xs text-slate-400 leading-relaxed">
-            Project Apollo is loaded with real-time meeting insights & commitment tracking.
+            Connected to Hindsight long-term memory engine.
           </p>
         </div>
       </div>
 
       {/* User / Profile Section */}
       <div className="p-3 border-t border-slate-800/80 bg-slate-900/50">
-        <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-800/60 transition-colors cursor-pointer group">
-          <div className="flex items-center gap-3">
-            <div className="relative">
+        <div className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-800/60 transition-colors">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="relative shrink-0">
               <div className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-white font-semibold text-xs shadow-inner">
-                {currentUser.initials}
+                {initials}
               </div>
               <span className="absolute bottom-0 right-0 w-2.5 h-2.5 bg-emerald-500 border-2 border-slate-900 rounded-full"></span>
             </div>
             <div className="text-left overflow-hidden">
-              <p className="text-sm font-semibold text-slate-200 truncate group-hover:text-white transition-colors">
-                {currentUser.name}
+              <p className="text-sm font-semibold text-slate-200 truncate">
+                {user?.name || 'Logged in user'}
               </p>
               <p className="text-xs text-slate-500 truncate">
-                {currentUser.role}
+                {user?.email || 'User'}
               </p>
             </div>
           </div>
-          <Settings className="w-4 h-4 text-slate-500 group-hover:text-slate-300 transition-colors" />
+          <button
+            onClick={handleLogout}
+            title="Log out"
+            className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-slate-800 transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
+          </button>
         </div>
       </div>
     </aside>

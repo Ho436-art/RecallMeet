@@ -1,7 +1,8 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { useParams, useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/Sidebar';
 import { 
   Calendar, 
@@ -17,16 +18,193 @@ import {
   CheckCircle2, 
   ChevronDown, 
   ChevronUp, 
-  X,
-  Share2
+  Loader2,
+  AlertCircle,
+  Trash2
 } from 'lucide-react';
-import { apolloMeetingDetail, apolloDetailData } from '@/data/mockData';
+import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { Meeting, Project, Commitment, MeetingAnalysisResponse } from '@/lib/types';
+import { ConfirmDeleteModal } from '@/components/ConfirmDeleteModal';
 
-export default function MeetingDetailPage({ params }: { params: { id: string } }) {
-  const [showPrepareModal, setShowPrepareModal] = useState(false);
+function deriveProjectCode(name: string): string {
+  const clean = name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+  return clean.slice(0, 6) || 'PROJ';
+}
+
+function formatDate(dateStr: string | null | undefined): string {
+  if (!dateStr) return 'Recently';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return dateStr;
+    return d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  } catch {
+    return dateStr;
+  }
+}
+
+export default function MeetingDetailPage({ params }: { params?: { id?: string } }) {
+  const router = useRouter();
+  const urlParams = useParams();
+  const rawId = (params?.id || urlParams?.id) as string;
+
+  const [meeting, setMeeting] = useState<Meeting | null>(null);
+  const [project, setProject] = useState<Project | null>(null);
+  const [commitments, setCommitments] = useState<Commitment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [isTranscriptExpanded, setIsTranscriptExpanded] = useState(true);
 
-  const meeting = apolloMeetingDetail; // Focus on Apollo realistic mock meeting detail
+  // Deletion states
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const handleDeleteMeeting = async () => {
+    if (!meeting) return;
+    try {
+      setIsDeleting(true);
+      setDeleteError(null);
+      await apiDelete(`/meetings/${meeting.id}`);
+      router.push(`/projects/${meeting.project_id}?deleted_meeting=true`);
+    } catch (err) {
+      console.error('Failed to delete meeting:', err);
+      setDeleteError(err instanceof Error ? err.message : 'Failed to delete meeting');
+      setIsDeleting(false);
+    }
+  };
+
+  const loadMeetingData = async () => {
+    if (!rawId) return;
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      let resolvedMeeting: Meeting | null = null;
+      const isUuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+      if (!isUuidPattern.test(rawId)) {
+        const allMeetings = await apiGet<Meeting[]>('/meetings');
+        resolvedMeeting = allMeetings[0] || null;
+        if (!resolvedMeeting) {
+          setError('No meetings found');
+          setLoading(false);
+          return;
+        }
+      } else {
+        resolvedMeeting = await apiGet<Meeting>(`/meetings/${rawId}`);
+      }
+
+      setMeeting(resolvedMeeting);
+
+      // Load related project and commitments
+      const [projData, projCommitments] = await Promise.all([
+        apiGet<Project>(`/projects/${resolvedMeeting.project_id}`).catch(() => null),
+        apiGet<Commitment[]>(`/commitments/project/${resolvedMeeting.project_id}`).catch(() => [] as Commitment[])
+      ]);
+
+      setProject(projData);
+      const meetingCommitments = projCommitments.filter(c => c.meeting_id === resolvedMeeting!.id);
+      setCommitments(meetingCommitments.length > 0 ? meetingCommitments : projCommitments);
+    } catch (err) {
+      console.error('Failed to load meeting:', err);
+      setError(err instanceof Error ? err.message : 'Failed to load meeting details');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMeetingData();
+  }, [rawId]);
+
+  const handleAnalyzeMeeting = async () => {
+    if (!meeting) return;
+    try {
+      setAnalyzing(true);
+      const analysis = await apiPost<MeetingAnalysisResponse>(`/meetings/${meeting.id}/analyze`);
+      
+      // Update meeting fields
+      setMeeting(prev => prev ? {
+        ...prev,
+        summary: analysis.summary,
+        decisions: analysis.decisions,
+        unresolved_issues: analysis.unresolved_issues
+      } : null);
+
+      // Refresh commitments
+      const updatedCommitments = await apiGet<Commitment[]>(`/commitments/project/${meeting.project_id}`).catch(() => []);
+      const meetingCommitments = updatedCommitments.filter(c => c.meeting_id === meeting.id);
+      setCommitments(meetingCommitments.length > 0 ? meetingCommitments : updatedCommitments);
+    } catch (err) {
+      console.error('Failed to analyze meeting:', err);
+      alert(err instanceof Error ? err.message : 'Analysis failed');
+    } finally {
+      setAnalyzing(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex min-h-screen bg-slate-950 font-sans">
+        <Sidebar activeTab="meetings" />
+        <main className="flex-1 p-6 lg:p-8 flex items-center justify-center">
+          <div className="text-center space-y-3">
+            <Loader2 className="w-8 h-8 text-indigo-400 animate-spin mx-auto" />
+            <p className="text-xs text-slate-400">Loading meeting details...</p>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (error || !meeting) {
+    return (
+      <div className="flex min-h-screen bg-slate-950 font-sans">
+        <Sidebar activeTab="meetings" />
+        <main className="flex-1 p-6 lg:p-8 flex items-center justify-center">
+          <div className="max-w-md w-full p-6 rounded-2xl bg-slate-900 border border-slate-800 text-center space-y-4">
+            <AlertCircle className="w-10 h-10 text-red-400 mx-auto" />
+            <h2 className="text-lg font-bold text-slate-100">Unable to load meeting</h2>
+            <p className="text-xs text-slate-400">{error || 'Meeting not found.'}</p>
+            <Link
+              href="/projects"
+              className="inline-flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold"
+            >
+              <ArrowLeft className="w-4 h-4" />
+              <span>Back to Projects</span>
+            </Link>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  const projectCode = project ? deriveProjectCode(project.name) : 'PROJ';
+  const projectName = project ? project.name : 'Project';
+
+  // Parse decisions
+  const decisionsList = (meeting.decisions || '')
+    .split('\n')
+    .map(d => d.trim())
+    .filter(Boolean);
+
+  // Parse unresolved issues
+  const unresolvedIssuesList = (meeting.unresolved_issues || '')
+    .split('\n')
+    .map(i => i.trim())
+    .filter(Boolean);
+
+  // Parse transcript lines
+  const transcriptLines = (meeting.transcript || '')
+    .split('\n')
+    .map(l => l.trim())
+    .filter(Boolean);
 
   return (
     <div className="flex min-h-screen bg-slate-950 font-sans">
@@ -39,9 +217,9 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
 
           {/* Breadcrumb Navigation */}
           <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Link href="/projects/apollo" className="hover:text-indigo-400 transition-colors flex items-center gap-1">
+            <Link href={`/projects/${meeting.project_id}`} className="hover:text-indigo-400 transition-colors flex items-center gap-1">
               <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Project Apollo</span>
+              <span>{projectName}</span>
             </Link>
             <span className="text-slate-600">/</span>
             <span className="text-slate-200 font-medium">Meeting Detail</span>
@@ -52,11 +230,11 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
             <div>
               <div className="flex items-center gap-3 mb-2 flex-wrap">
                 <span className="px-2.5 py-1 rounded-md text-xs font-mono font-bold bg-indigo-500/20 text-indigo-300 border border-indigo-500/40">
-                  {meeting.projectCode}
+                  {projectCode}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center gap-1">
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  {meeting.status}
+                  {meeting.summary ? 'Analysis Ingested' : 'Ingested'}
                 </span>
               </div>
               <h1 className="text-2xl lg:text-3xl font-extrabold text-slate-100 tracking-tight">
@@ -65,38 +243,58 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
               <div className="flex items-center gap-4 text-xs text-slate-400 mt-2 flex-wrap">
                 <span className="flex items-center gap-1.5 text-indigo-300 font-medium">
                   <Calendar className="w-3.5 h-3.5 text-indigo-400" />
-                  {meeting.dateTime}
+                  {formatDate(meeting.meeting_date)}
                 </span>
                 <span className="text-slate-600">•</span>
                 <span className="flex items-center gap-1.5">
                   <Clock className="w-3.5 h-3.5 text-slate-500" />
-                  {meeting.duration}
+                  Recorded Sync
                 </span>
                 <span className="text-slate-600">•</span>
                 <span className="flex items-center gap-1.5">
-                  <Users className="w-3.5 h-3.5 text-slate-500" />
-                  {meeting.participants.length} Participants
+                  <CheckSquare className="w-3.5 h-3.5 text-slate-500" />
+                  {commitments.length} Commitments
                 </span>
               </div>
             </div>
 
             {/* Action Buttons */}
-            <div className="flex items-center gap-3 shrink-0">
-              {/* Prepare Me Button */}
+            <div className="flex items-center gap-3 shrink-0 flex-wrap">
+              <button
+                onClick={handleAnalyzeMeeting}
+                disabled={analyzing}
+                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition-colors"
+              >
+                {analyzing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-indigo-400" />
+                    <span>Analyzing with Groq...</span>
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4 text-indigo-400" />
+                    <span>{meeting.summary ? 'Re-analyze with Groq' : 'Analyze Meeting'}</span>
+                  </>
+                )}
+              </button>
+
               <Link
-                href="/prepare/apollo"
+                href={`/prepare?project=${meeting.project_id}`}
                 className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-semibold flex items-center gap-2 shadow-lg shadow-indigo-500/20 transition-all duration-150"
               >
                 <Sparkles className="w-4 h-4 text-indigo-200" />
                 <span>Prepare Me</span>
               </Link>
 
+              {/* Delete Meeting Button */}
               <button
-                onClick={() => alert("Meeting summary exported!")}
-                className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold flex items-center gap-2 border border-slate-700 transition-colors"
+                type="button"
+                onClick={() => setShowDeleteModal(true)}
+                className="px-3.5 py-2.5 rounded-xl bg-slate-800/80 hover:bg-red-500/10 text-slate-400 hover:text-red-400 text-xs font-semibold flex items-center gap-1.5 border border-slate-700/80 hover:border-red-500/30 transition-all duration-150"
+                title="Delete Meeting"
               >
-                <Share2 className="w-4 h-4 text-slate-400" />
-                <span>Export Summary</span>
+                <Trash2 className="w-4 h-4" />
+                <span>Delete Meeting</span>
               </button>
             </div>
           </div>
@@ -104,28 +302,27 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
           {/* Grid Layout: Main Meeting Intelligence (2 cols) & Sidebar Metadata (1 col) */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-            {/* Left Column (2 Cols): Discussion Points, Key Decisions & Transcript */}
+            {/* Left Column (2 Cols): Discussion / Summary, Key Decisions & Transcript */}
             <div className="lg:col-span-2 space-y-6">
 
-              {/* Discussion Points Section */}
+              {/* Executive Summary Section */}
               <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 shadow-lg">
                 <div className="flex items-center gap-2 pb-4 mb-4 border-b border-slate-800/80">
                   <MessageSquare className="w-4 h-4 text-indigo-400" />
                   <h2 className="text-base font-bold text-slate-100">
-                    Discussion Points
+                    Meeting Summary & Key Points
                   </h2>
                 </div>
 
-                <ul className="space-y-2.5 text-xs text-slate-300">
-                  {meeting.discussionPoints.map((point, idx) => (
-                    <li key={idx} className="flex items-start gap-2.5 p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/60">
-                      <span className="w-5 h-5 rounded-full bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 flex items-center justify-center font-mono font-bold text-[10px] shrink-0 mt-0.5">
-                        {idx + 1}
-                      </span>
-                      <span className="leading-relaxed">{point}</span>
-                    </li>
-                  ))}
-                </ul>
+                {meeting.summary ? (
+                  <div className="p-4 rounded-xl bg-slate-950/80 border border-slate-800 text-xs text-slate-200 leading-relaxed">
+                    {meeting.summary}
+                  </div>
+                ) : (
+                  <div className="p-4 rounded-xl bg-slate-950/60 border border-slate-800 text-xs text-slate-400">
+                    No summary generated yet. Click "Analyze Meeting" above to trigger Groq LLM extraction.
+                  </div>
+                )}
               </div>
 
               {/* Key Decisions Section */}
@@ -137,30 +334,26 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
                   </h2>
                 </div>
 
-                <div className="space-y-3">
-                  {meeting.keyDecisions.map((decision) => (
-                    <div
-                      key={decision.id}
-                      className="p-4 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
+                {decisionsList.length === 0 ? (
+                  <p className="text-xs text-slate-400">No decisions recorded for this meeting.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {decisionsList.map((decision, idx) => (
+                      <div
+                        key={idx}
+                        className="p-4 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1.5"
+                      >
                         <h3 className="text-sm font-bold text-slate-200 flex items-center gap-2">
                           <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                          {decision.title}
+                          {decision}
                         </h3>
-                        <span className="text-[11px] text-slate-500 font-mono">
-                          {decision.date}
-                        </span>
+                        <p className="text-[11px] text-slate-500 pl-4">
+                          Extracted from meeting sync
+                        </p>
                       </div>
-                      <p className="text-xs text-slate-400 leading-relaxed pl-4">
-                        {decision.context}
-                      </p>
-                      <div className="pt-1 pl-4 text-[11px] text-indigo-400 font-medium">
-                        Agreed by: {decision.agreedBy}
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Meeting Transcript Section */}
@@ -185,69 +378,24 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
                 </div>
 
                 {isTranscriptExpanded && (
-                  <div className="space-y-3 max-h-96 overflow-y-auto pr-2">
-                    {meeting.transcript.map((item, idx) => (
-                      <div key={idx} className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 space-y-1">
-                        <div className="flex items-center justify-between text-xs">
-                          <span className="font-bold text-indigo-300 flex items-center gap-1.5">
-                            <span className="w-5 h-5 rounded-full bg-indigo-500/20 text-indigo-300 text-[10px] font-bold flex items-center justify-center">
-                              {item.initials}
-                            </span>
-                            {item.speaker}
-                          </span>
-                          <span className="text-[10px] text-slate-500 font-mono">{item.timestamp}</span>
+                  <div className="space-y-2.5 max-h-96 overflow-y-auto pr-2">
+                    {transcriptLines.length === 0 ? (
+                      <p className="text-xs text-slate-500">No transcript text available.</p>
+                    ) : (
+                      transcriptLines.map((line, idx) => (
+                        <div key={idx} className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs text-slate-300 font-mono leading-relaxed">
+                          {line}
                         </div>
-                        <p className="text-xs text-slate-300 leading-relaxed pl-6">
-                          {item.text}
-                        </p>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 )}
               </div>
 
             </div>
 
-            {/* Right Column (1 Col): Participants, Commitments & Unresolved Issues */}
+            {/* Right Column (1 Col): Extracted Commitments & Unresolved Issues */}
             <div className="lg:col-span-1 space-y-6">
-
-              {/* Participants */}
-              <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 shadow-lg">
-                <div className="flex items-center justify-between pb-4 mb-4 border-b border-slate-800/80">
-                  <div className="flex items-center gap-2">
-                    <Users className="w-4 h-4 text-indigo-400" />
-                    <h2 className="text-base font-bold text-slate-100">
-                      Participants
-                    </h2>
-                  </div>
-                  <span className="text-xs text-slate-400 font-semibold">
-                    {meeting.participants.length} Present
-                  </span>
-                </div>
-
-                <div className="space-y-3">
-                  {meeting.participants.map((member) => (
-                    <div
-                      key={member.id}
-                      className="flex items-center justify-between p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80"
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-full bg-gradient-to-tr ${member.avatarBg} flex items-center justify-center text-white font-bold text-xs shadow-inner`}>
-                          {member.initials}
-                        </div>
-                        <div>
-                          <p className="text-xs font-semibold text-slate-200">
-                            {member.name}
-                          </p>
-                          <p className="text-[10px] text-slate-500">
-                            {member.role}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
 
               {/* Extracted Commitments */}
               <div className="p-6 rounded-2xl bg-slate-900 border border-slate-800 shadow-lg">
@@ -259,26 +407,32 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
                     </h2>
                   </div>
                   <span className="text-xs font-bold text-amber-400">
-                    {meeting.commitments.length} Action Items
+                    {commitments.length} Action Items
                   </span>
                 </div>
 
-                <div className="space-y-3">
-                  {meeting.commitments.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs space-y-1.5"
-                    >
-                      <p className="font-medium text-slate-200 leading-snug">
-                        {item.task}
-                      </p>
-                      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
-                        <span className="text-indigo-300 font-mono">{item.assignee}</span>
-                        <span className="text-amber-400 font-semibold">Due {item.dueDate}</span>
+                {commitments.length === 0 ? (
+                  <p className="text-xs text-slate-500">No commitments extracted yet.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {commitments.map((item) => (
+                      <div
+                        key={item.id}
+                        className="p-3 rounded-xl bg-slate-950/70 border border-slate-800/80 text-xs space-y-1.5"
+                      >
+                        <p className="font-medium text-slate-200 leading-snug">
+                          {item.description}
+                        </p>
+                        <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1">
+                          <span className="text-indigo-300 font-mono">{item.owner_name}</span>
+                          <span className="text-amber-400 font-semibold">
+                            Due {formatDate(item.due_date)}
+                          </span>
+                        </div>
                       </div>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
               {/* Unresolved Issues */}
@@ -291,30 +445,31 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
                     </h2>
                   </div>
                   <span className="text-xs font-bold text-red-400">
-                    {meeting.unresolvedIssues.length} Flagged
+                    {unresolvedIssuesList.length} Flagged
                   </span>
                 </div>
 
-                <div className="space-y-3">
-                  {meeting.unresolvedIssues.map((issue) => (
-                    <div
-                      key={issue.id}
-                      className="p-3 rounded-xl bg-red-500/5 border border-red-500/20 text-xs space-y-1.5"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
-                          {issue.severity} Severity
-                        </span>
-                        <span className="text-[10px] text-slate-500 font-mono">
-                          Owner: {issue.owner}
-                        </span>
+                {unresolvedIssuesList.length === 0 ? (
+                  <p className="text-xs text-slate-500">No unresolved issues flagged.</p>
+                ) : (
+                  <div className="space-y-3">
+                    {unresolvedIssuesList.map((issue, idx) => (
+                      <div
+                        key={idx}
+                        className="p-3 rounded-xl bg-red-500/5 border border-red-500/20 text-xs space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-red-500/20 text-red-300">
+                            Flagged Issue
+                          </span>
+                        </div>
+                        <p className="font-semibold text-slate-200">
+                          {issue}
+                        </p>
                       </div>
-                      <p className="font-semibold text-slate-200">
-                        {issue.issue}
-                      </p>
-                    </div>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+                )}
               </div>
 
             </div>
@@ -324,72 +479,22 @@ export default function MeetingDetailPage({ params }: { params: { id: string } }
         </div>
       </main>
 
-      {/* Prepare Me Modal */}
-      {showPrepareModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in">
-          <div className="w-full max-w-xl bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl space-y-5">
-            <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 text-white">
-                  <Sparkles className="w-5 h-5" />
-                </div>
-                <div>
-                  <h3 className="text-lg font-bold text-slate-100">
-                    AI Briefing: {meeting.title}
-                  </h3>
-                  <p className="text-xs text-indigo-300">
-                    Executive recall summary for Project Apollo
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowPrepareModal(false)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg hover:bg-slate-800"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="space-y-4 text-xs">
-              <div className="p-3.5 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-slate-200">
-                <span className="font-bold text-indigo-300 block mb-1">Executive Summary:</span>
-                {apolloDetailData.prepareBriefing.executiveSummary}
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-200 mb-2">Key Discussion Highlights:</h4>
-                <ul className="space-y-1.5 text-slate-300">
-                  {meeting.discussionPoints.slice(0, 3).map((point, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <span className="text-indigo-400 font-bold">•</span>
-                      <span>{point}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div>
-                <h4 className="font-bold text-slate-200 mb-2">Required Action Item Signoffs:</h4>
-                <ul className="space-y-1.5 text-slate-300">
-                  {meeting.commitments.map((c, idx) => (
-                    <li key={idx} className="flex items-start gap-2">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
-                      <span><strong>{c.assignee}</strong>: {c.task} (Due {c.dueDate})</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-
-            <button
-              onClick={() => setShowPrepareModal(false)}
-              className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs rounded-xl shadow-lg shadow-indigo-600/20"
-            >
-              Done / Close Briefing
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Delete Meeting Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={showDeleteModal}
+        title="Delete this meeting?"
+        description="This will permanently remove this meeting and its extracted commitments."
+        confirmButtonText="Delete Meeting"
+        isDeleting={isDeleting}
+        error={deleteError}
+        onConfirm={handleDeleteMeeting}
+        onCancel={() => {
+          if (!isDeleting) {
+            setShowDeleteModal(false);
+            setDeleteError(null);
+          }
+        }}
+      />
     </div>
   );
 }

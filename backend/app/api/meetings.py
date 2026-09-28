@@ -225,3 +225,38 @@ def analyze_meeting(
             analysis["commitments"]
         )
     )
+
+
+# --------------------------------------------------
+# DELETE MEETING
+# --------------------------------------------------
+
+@router.delete(
+    "/{meeting_id}",
+    status_code=status.HTTP_204_NO_CONTENT
+)
+def delete_meeting(
+    meeting_id: UUID,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    meeting = db.scalar(
+        select(Meeting).where(Meeting.id == meeting_id)
+    )
+
+    if not meeting:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Meeting not found"
+        )
+
+    if meeting.user_id != current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to delete this meeting"
+        )
+
+    db.delete(meeting)
+    db.commit()
+
+    return None

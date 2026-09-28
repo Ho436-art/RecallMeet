@@ -1,9 +1,10 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { FolderKanban, CalendarDays, CheckSquare, TrendingUp, LucideIcon } from 'lucide-react';
-import { dashboardStats } from '@/data/mockData';
+import { apiGet } from '@/lib/api';
+import { Project, Meeting, Commitment } from '@/lib/types';
 
 interface StatItemProps {
   title: string;
@@ -76,35 +77,72 @@ const StatItem: React.FC<StatItemProps> = ({
 };
 
 export const DashboardStatsGrid: React.FC = () => {
+  const [stats, setStats] = useState({
+    activeProjects: 0,
+    totalMeetings: 0,
+    pendingCommitments: 0,
+    primaryProject: 'Active Projects',
+    firstProjectId: ''
+  });
+
+  useEffect(() => {
+    async function loadStats() {
+      try {
+        const [projects, meetings, commitments] = await Promise.all([
+          apiGet<Project[]>('/projects').catch(() => [] as Project[]),
+          apiGet<Meeting[]>('/meetings').catch(() => [] as Meeting[]),
+          apiGet<Commitment[]>('/commitments').catch(() => [] as Commitment[])
+        ]);
+
+        const pendingCount = commitments.filter(c => c.status === 'pending').length;
+        const apollo = projects.find(p => p.name.toLowerCase().includes('apollo'));
+        const primaryName = apollo ? apollo.name : (projects[0]?.name || 'Active Projects');
+        const firstId = apollo ? apollo.id : (projects[0]?.id || '');
+
+        setStats({
+          activeProjects: projects.length,
+          totalMeetings: meetings.length,
+          pendingCommitments: pendingCount,
+          primaryProject: primaryName,
+          firstProjectId: firstId
+        });
+      } catch (err) {
+        console.error('Failed to load dashboard stats:', err);
+      }
+    }
+
+    loadStats();
+  }, []);
+
   return (
     <div className="grid grid-cols-1 md:grid-cols-3 gap-5 my-6">
       <StatItem
         title="Active Projects"
-        value={dashboardStats.activeProjectsCount}
-        subtitle="Primary Focus: Project Apollo"
+        value={stats.activeProjects}
+        subtitle={`Focus: ${stats.primaryProject}`}
         icon={FolderKanban}
         colorScheme="indigo"
-        accentBadge="Apollo Primary"
+        accentBadge={stats.primaryProject.includes('Apollo') ? 'Apollo Primary' : 'Active'}
         href="/projects"
       />
 
       <StatItem
-        title="Upcoming Meetings"
-        value={dashboardStats.upcomingMeetingsCount}
-        subtitle="Next sync today at 4:30 PM"
+        title="Recorded Meetings"
+        value={stats.totalMeetings}
+        subtitle="Ingested transcripts & AI memory"
         icon={CalendarDays}
         colorScheme="emerald"
-        accentBadge="3 Scheduled"
-        href="/prepare/apollo"
+        accentBadge={`${stats.totalMeetings} Syncs`}
+        href={stats.firstProjectId ? `/prepare?project=${stats.firstProjectId}` : '/prepare'}
       />
 
       <StatItem
         title="Pending Commitments"
-        value={dashboardStats.pendingCommitmentsCount}
+        value={stats.pendingCommitments}
         subtitle="Action items extracted from transcripts"
         icon={CheckSquare}
         colorScheme="amber"
-        accentBadge="Attention Req."
+        accentBadge={stats.pendingCommitments > 0 ? "Action Req." : "Clear"}
         href="/commitments"
       />
     </div>

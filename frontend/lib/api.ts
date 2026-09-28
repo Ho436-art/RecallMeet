@@ -100,3 +100,10 @@ export async function apiPostForm<T>(
     body: formData,
   });
 }
+
+
+export async function apiDelete<T = void>(endpoint: string): Promise<T> {
+  return apiRequest(endpoint, {
+    method: "DELETE",
+  });
+}
