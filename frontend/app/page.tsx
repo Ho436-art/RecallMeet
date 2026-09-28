@@ -1,6 +1,12 @@
 "use client";
 
-import React from 'react';
+import React, { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+import {
+  apiGet,
+  clearAuthToken,
+  getAuthToken,
+} from "@/lib/api";
 import { Sidebar } from '@/components/Sidebar';
 import { WelcomeHeader } from '@/components/WelcomeHeader';
 import { DashboardStatsGrid } from '@/components/StatCard';
@@ -8,6 +14,37 @@ import { RecentMeetings } from '@/components/RecentMeetings';
 import { ProjectsNeedingAttention } from '@/components/ProjectsNeedingAttention';
 
 export default function DashboardPage() {
+  const router = useRouter();
+  const [checkingAuth, setCheckingAuth] = useState(true);
+
+  useEffect(() => {
+    async function checkAuthentication() {
+      const token = getAuthToken();
+
+      if (!token) {
+        router.replace("/login");
+        return;
+      }
+
+      try {
+        await apiGet("/auth/me");
+        setCheckingAuth(false);
+      } catch {
+        clearAuthToken();
+        router.replace("/login");
+      }
+    }
+
+    checkAuthentication();
+  }, [router]);
+
+  if (checkingAuth) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300">
+        Checking authentication...
+      </div>
+    );
+  }
   return (
     <div className="flex min-h-screen bg-slate-950 font-sans">
       {/* Sidebar Navigation */}
