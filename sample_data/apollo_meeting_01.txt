@@ -1,0 +1,19 @@
+Meeting: Apollo Client Integration
+Date: September 27, 2026
+
+Participants:
+Harini - Project Lead
+Rahul - Backend Engineer
+Priya - Apollo Client
+
+Priya discussed the API integration requirements.
+
+The client requested API documentation before the next meeting.
+
+Harini agreed to send the API documentation by September 30, 2026.
+
+The team still needs to resolve the authentication flow.
+
+The client also raised concerns about the project timeline.
+
+Next meeting will focus on integration progress and unresolved issues.
