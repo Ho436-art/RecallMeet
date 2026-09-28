@@ -37,12 +37,18 @@ def generate_preparation(
 
     memories = []
 
-    for memory in hindsight_result.results:
-        memories.append(memory.text)
+    if hindsight_result and hasattr(hindsight_result, "results") and hindsight_result.results:
+        for memory in hindsight_result.results:
+            text = getattr(memory, "text", None) or (memory.get("text") if isinstance(memory, dict) else str(memory))
+            if text:
+                memories.append(text)
 
-    hindsight_context = "\n".join(
-        f"- {memory}" for memory in memories
-    )
+    if memories:
+        hindsight_context = "\n".join(
+            f"- {memory}" for memory in memories
+        )
+    else:
+        hindsight_context = "No previous Hindsight memory recorded yet."
 
     prompt = f"""
 You are the preparation engine for RecallMeet.

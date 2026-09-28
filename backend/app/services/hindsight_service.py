@@ -49,5 +49,9 @@ def recall_project_memory(
             bank_id=get_user_bank_id(user_id),
             query=query
         )
+    except Exception:
+        # Bank may not exist yet if no feedback has been submitted,
+        # or Hindsight API returned 404 Not Found.
+        return None
     finally:
-        client.close()
+        client.close()
